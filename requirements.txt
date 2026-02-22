@@ -4,6 +4,10 @@ python-chess>=1.999
 # Environment variables from .env file
 python-dotenv>=1.0.0
 
-# LLM APIs (we'll add these as we implement adapters)
+# LLM APIs
 openai>=1.0.0
 google-genai>=1.0.0
+anthropic>=0.40.0
+mistralai>=1.0.0
+cohere>=5.0.0
+groq>=0.4.0

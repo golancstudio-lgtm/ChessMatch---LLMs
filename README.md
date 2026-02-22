@@ -4,7 +4,7 @@ A Python script that pits two Large Language Models against each other in a game
 
 ## Features
 
-- **Configurable LLM selection**: Choose which two LLMs play (starting with ChatGPT 5.2 and Gemini)
+- **Configurable LLM selection**: Choose which two LLMs play (ChatGPT, Gemini, Claude, Mistral, Cohere, Llama via Groq, Grok)
 - **PGN move format**: LLMs respond with Standard Algebraic Notation (e.g., `e4`, `Nf3`, `O-O`)
 - **Configurable retries**: Set how many times an LLM can retry after an illegal move
 - **Automatic validation**: Uses `python-chess` to validate moves and apply them to the board
@@ -36,8 +36,13 @@ A Python script that pits two Large Language Models against each other in a game
 
    **Option B – Environment variables**:
 
-   - **OpenAI (ChatGPT 5.2)**: `OPENAI_API_KEY`
+   - **OpenAI (ChatGPT)**: `OPENAI_API_KEY`
    - **Google (Gemini)**: `GEMINI_API_KEY` or `GOOGLE_API_KEY`
+   - **Anthropic (Claude)**: `ANTHROPIC_API_KEY`
+   - **Mistral**: `MISTRAL_API_KEY`
+   - **Cohere**: `COHERE_API_KEY`
+   - **Groq (Llama)**: `GROQ_API_KEY`
+   - **xAI (Grok)**: `XAI_API_KEY`
 
 ## Usage
 
@@ -61,7 +66,7 @@ ChessMatch - LLMs/
 └── src/
     ├── __init__.py
     ├── chess_engine.py  # FEN, move validation, PGN handling
-    ├── llm_adapters.py  # LLM API wrappers (ChatGPT, Gemini)
+    ├── llm_adapters.py  # LLM API wrappers (ChatGPT, Gemini, Claude, Mistral, Cohere, Llama, Grok)
     ├── prompt_builder.py
     ├── response_parser.py
     └── game_loop.py
