@@ -1,0 +1,9 @@
+# Chess engine
+python-chess>=1.999
+
+# Environment variables from .env file
+python-dotenv>=1.0.0
+
+# LLM APIs (we'll add these as we implement adapters)
+openai>=1.0.0
+google-genai>=1.0.0
