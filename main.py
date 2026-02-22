@@ -136,6 +136,21 @@ def _print_result(result: GameResult) -> None:
         reason = "Time forfeit" if result.termination_reason == "time" else "Forfeit"
         print(f"{reason} by: {result.forfeit_by}")
         print(f"Winner: {result.winner_name}")
+
+        if result.termination_reason == "forfeit" and result.forfeit_attempts:
+            print("\n--- Failed attempts (what the LLM sent and why it was rejected) ---")
+            for i, (prompt, response, rejection_reason) in enumerate(
+                result.forfeit_attempts, 1
+            ):
+                print(f"\nAttempt {i}:")
+                print("  Prompt sent:")
+                for line in prompt.strip().split("\n"):
+                    print(f"    {line}")
+                print("  LLM response (raw):")
+                for line in (response or "(empty)").strip().split("\n"):
+                    print(f"    {line}")
+                print(f"  Rejected because: {rejection_reason}")
+            print("-" * 50)
     elif result.winner_name:
         print(f"Winner: {result.winner_name}")
         if result.loser_name:

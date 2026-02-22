@@ -19,6 +19,7 @@ class ParsedResponse:
 
     move: Optional[str]
     explanation: str
+    error_type: Optional[str] = None  # "invalid_json" or "no_move" when move is None
 
 
 # PGN move patterns (fallback when JSON fails)
@@ -82,10 +83,11 @@ def parse_llm_response(response: str) -> ParsedResponse:
         response: Raw text response from the LLM.
 
     Returns:
-        ParsedResponse with move (or None if not found) and explanation.
+        ParsedResponse with move (or None if not found), explanation, and
+        error_type ("invalid_json" or "no_move") when move is None.
     """
     if not response or not response.strip():
-        return ParsedResponse(move=None, explanation="")
+        return ParsedResponse(move=None, explanation="", error_type="no_move")
 
     data = _extract_json(response)
     if data and isinstance(data, dict):
@@ -98,11 +100,19 @@ def parse_llm_response(response: str) -> ParsedResponse:
             return ParsedResponse(move=move, explanation=str(explanation or "").strip())
         # JSON has move field but empty/invalid - try to get from explanation
         move = _extract_move_regex(str(explanation)) or _extract_move_regex(response)
-        return ParsedResponse(move=move, explanation=str(explanation or "").strip())
+        if move:
+            return ParsedResponse(move=move, explanation=str(explanation or "").strip())
+        return ParsedResponse(
+            move=None,
+            explanation=str(explanation or "").strip(),
+            error_type="no_move",
+        )
 
-    # Fallback: regex
+    # Fallback: regex (JSON parsing failed)
     move = _extract_move_regex(response)
-    return ParsedResponse(move=move, explanation="")
+    if move:
+        return ParsedResponse(move=move, explanation="")
+    return ParsedResponse(move=None, explanation="", error_type="invalid_json")
 
 
 def extract_pgn_move(response: str) -> Optional[str]:

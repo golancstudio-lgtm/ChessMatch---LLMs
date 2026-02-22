@@ -13,7 +13,7 @@ import chess
 from .chess_engine import ChessEngine, MoveResult
 from .llm_adapters import LLMAdapter
 from .prompt_builder import MoveRequest, build_prompts
-from .response_parser import extract_pgn_move
+from .response_parser import parse_llm_response
 
 
 @dataclass
@@ -26,6 +26,8 @@ class GameResult:
     loser_name: Optional[str] = None
     termination_reason: Optional[str] = None  # e.g. "checkmate", "stalemate", "draw", "time"
     forfeit_by: Optional[str] = None  # If game ended by forfeit (retries or time)
+    forfeit_attempts: list[tuple[str, str, str]] = field(default_factory=list)
+    # When forfeit by retries: (user_prompt, llm_response, rejection_reason) for each failed attempt
 
 
 def _side_name(is_white: bool) -> str:
@@ -46,7 +48,8 @@ def run_game(
     Args:
         white_llm: LLM playing as White.
         black_llm: LLM playing as Black.
-        max_retries: Maximum retries per move when the LLM makes an illegal move.
+        max_retries: Maximum retries per turn (resets each turn). Applies to illegal
+            moves, invalid JSON, and unparseable moves.
         time_per_player_seconds: Time limit per player in seconds. None or 0 = no limit.
         on_move: Optional callback(side_name, llm_name, move, is_retry, conversation)
                  for each move. conversation is a list of (script_prompt, llm_response) tuples
@@ -121,28 +124,42 @@ def run_game(
                         result.winner_name = white_llm.name
                         return result
 
-            pgn_move = extract_pgn_move(response)
+            parsed = parse_llm_response(response)
+            pgn_move = parsed.move
 
             if pgn_move is None:
-                # No parseable move - treat as illegal
-                move_result = MoveResult(
-                    success=False,
-                    error_message="Could not parse your response. "
-                    'Reply with JSON: {"move": "e4", "explanation": "..."}',
-                )
-                previous_attempt = "your response (no valid PGN move found)"
+                # Invalid JSON or unparseable move - treat as illegal, tell LLM the mistake
+                if parsed.error_type == "invalid_json":
+                    error_msg = (
+                        "Your response was not valid JSON. "
+                        'Please reply with exactly: {"move": "e4", "explanation": "..."}'
+                    )
+                else:
+                    error_msg = (
+                        "Could not parse your move from your response. "
+                        "Please use PGN format (e.g. e4, Nf3, O-O, exd5)."
+                    )
+                move_result = MoveResult(success=False, error_message=error_msg)
+                previous_attempt = "your response (no valid move found)"
+                is_parse_error = True
             else:
                 move_result = engine.apply_pgn_move(pgn_move)
                 previous_attempt = pgn_move
+                is_parse_error = False
 
             if move_result.success:
-                move_history.append(pgn_move)
+                canonical_move = move_result.san_move or pgn_move
+                move_history.append(canonical_move)
                 move_applied = True
                 if on_move:
-                    on_move(side_name, llm.name, pgn_move, request.is_retry, conversation)
+                    on_move(side_name, llm.name, canonical_move, request.is_retry, conversation)
                 if on_time_update and use_timer:
                     on_time_update(white_remaining, black_remaining)
             else:
+                # Record failed attempt for forfeit display
+                result.forfeit_attempts.append(
+                    (user_prompt, response, move_result.error_message or "Unknown error")
+                )
                 retries_left -= 1
                 if retries_left < 0:
                     # Forfeit: max retries exceeded
@@ -160,6 +177,7 @@ def run_game(
                     is_retry=True,
                     error_message=move_result.error_message,
                     previous_attempt=previous_attempt,
+                    is_parse_error=is_parse_error,
                     white_remaining=white_remaining if use_timer else None,
                     black_remaining=black_remaining if use_timer else None,
                 )

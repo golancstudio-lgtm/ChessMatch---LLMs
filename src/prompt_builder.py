@@ -30,6 +30,7 @@ class MoveRequest:
     is_retry: bool = False
     error_message: Optional[str] = None
     previous_attempt: Optional[str] = None
+    is_parse_error: bool = False  # True if invalid JSON or unparseable move (not illegal move)
     white_remaining: Optional[float] = None  # Seconds, None = no timer
     black_remaining: Optional[float] = None
 
@@ -67,6 +68,7 @@ def build_system_prompt(side_to_move: str) -> str:
 
 TIME_SECTION = """
 Time remaining: White {white_time}, Black {black_time}. You ({side}) have {your_time} left.
+Consider your remaining time and respond quickly to avoid running out of time.
 """
 
 USER_PROMPT_FIRST_MOVE = """Current position (FEN): {fen}
@@ -81,13 +83,22 @@ Moves played so far: {move_history}
 It is {side}'s turn. Make your move. Reply with JSON: {{"move": "...", "explanation": "..."}}
 """
 
-USER_PROMPT_RETRY_TEMPLATE = """Current position (FEN): {fen}
+USER_PROMPT_RETRY_ILLEGAL = """Current position (FEN): {fen}
 {time_section}
 Moves played so far: {move_history}
 
 It is {side}'s turn. Your previous move "{previous_attempt}" was illegal: {error_message}
 
 Please try a different legal move. Reply with JSON: {{"move": "...", "explanation": "..."}}
+"""
+
+USER_PROMPT_RETRY_PARSE = """Current position (FEN): {fen}
+{time_section}
+Moves played so far: {move_history}
+
+It is {side}'s turn. Your previous response failed: {error_message}
+
+Please try again. Reply with JSON: {{"move": "...", "explanation": "..."}}
 """
 
 
@@ -143,13 +154,21 @@ def build_user_prompt(request: MoveRequest) -> str:
     side = request.side_to_move
     time_section = _build_time_section(request)
 
-    if request.is_retry and request.error_message and request.previous_attempt:
-        return USER_PROMPT_RETRY_TEMPLATE.format(
+    if request.is_retry and request.error_message:
+        if request.is_parse_error:
+            return USER_PROMPT_RETRY_PARSE.format(
+                fen=request.fen,
+                time_section=time_section,
+                move_history=move_history_str,
+                side=side,
+                error_message=request.error_message,
+            )
+        return USER_PROMPT_RETRY_ILLEGAL.format(
             fen=request.fen,
             time_section=time_section,
             move_history=move_history_str,
             side=side,
-            previous_attempt=request.previous_attempt,
+            previous_attempt=request.previous_attempt or "",
             error_message=request.error_message,
         )
 

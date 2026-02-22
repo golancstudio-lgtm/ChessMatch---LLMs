@@ -20,6 +20,7 @@ class MoveResult:
     success: bool
     new_fen: Optional[str] = None
     error_message: Optional[str] = None
+    san_move: Optional[str] = None  # Canonical SAN (e.g. Qh7# for mate) when success
 
 
 class ChessEngine:
@@ -99,8 +100,9 @@ class ChessEngine:
                 error_message=f"Could not parse move '{pgn_clean}': {e}",
             )
 
+        san = self._board.san(move)  # Canonical SAN (includes # for checkmate)
         self._board.push(move)
-        return MoveResult(success=True, new_fen=self._board.fen())
+        return MoveResult(success=True, new_fen=self._board.fen(), san_move=san)
 
     def get_legal_moves_san(self) -> list[str]:
         """Return all legal moves in PGN format for the current position."""
