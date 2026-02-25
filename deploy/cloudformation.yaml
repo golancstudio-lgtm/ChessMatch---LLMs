@@ -1,0 +1,302 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "ChessMatch LLM - S3, API Gateway REST, Lambdas for /api/state and /api/events"
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: chessmatch
+    Description: Project name used for resource naming.
+  EnvironmentName:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Environment (dev, staging, prod).
+
+Conditions:
+  IsProd: !Equals [ !Ref EnvironmentName, prod ]
+
+Resources:
+  # --- S3 Bucket (frontend + optional game state file) ---
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectName}-${EnvironmentName}-frontend-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: ["*"]
+            AllowedMethods: [GET, HEAD]
+            AllowedOrigins: ["*"]
+            MaxAge: 3600
+    DeletionPolicy: Retain
+
+  # State file object key: game_state/state.json (upload .chess_match_state.json here for Lambda to read)
+
+  # --- IAM role for Lambdas ---
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${EnvironmentName}-lambda-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+
+  LambdaExecutionPolicy:
+    Type: AWS::IAM::Policy
+    DependsOn: LambdaExecutionRole
+    Properties:
+      PolicyName: !Sub "${ProjectName}-${EnvironmentName}-lambda-policy"
+      Roles: [ !Ref LambdaExecutionRole ]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*"
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+            Resource: !Sub "${FrontendBucket.Arn}/*"
+
+  # --- Lambda: GET /api/state ---
+  StateLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${EnvironmentName}-api-state"
+      Runtime: python3.12
+      Handler: handler.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 10
+      MemorySize: 128
+      Environment:
+        Variables:
+          STATE_BUCKET: !Ref FrontendBucket
+          STATE_KEY: "game_state/state.json"
+      Code:
+        ZipFile: |
+          # Placeholder - deployment script uploads real code
+          def handler(event, context):
+              return {"statusCode": 200, "body": "{}"}
+    Metadata:
+      BuildPath: lambda/api_state
+
+  StateLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref StateLambda
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGatewayRestApi}/*"
+
+  # --- Lambda: GET /api/events ---
+  EventsLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${EnvironmentName}-api-events"
+      Runtime: python3.12
+      Handler: handler.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 5
+      MemorySize: 128
+      Code:
+        ZipFile: |
+          # Placeholder - deployment script uploads real code
+          def handler(event, context):
+              return {"statusCode": 200, "body": "event: state_updated\\ndata: {}\\n\\n"}
+    Metadata:
+      BuildPath: lambda/api_events
+
+  EventsLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref EventsLambda
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGatewayRestApi}/*"
+
+  # --- API Gateway REST API ---
+  ApiGatewayRestApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub "${ProjectName}-${EnvironmentName}-api"
+      Description: ChessMatch LLM REST API
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  ApiGatewayRestApiRoot:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt ApiGatewayRestApi.RootResourceId
+      PathPart: api
+      RestApiId: !Ref ApiGatewayRestApi
+
+  ApiStateResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !Ref ApiGatewayRestApiRoot
+      PathPart: state
+      RestApiId: !Ref ApiGatewayRestApi
+
+  ApiEventsResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !Ref ApiGatewayRestApiRoot
+      PathPart: events
+      RestApiId: !Ref ApiGatewayRestApi
+
+  # GET /api/state
+  ApiStateMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      ResourceId: !Ref ApiStateResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      RequestParameters:
+        method.request.header.Accept: false
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+          ResponseModels:
+            application/json: Empty
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${StateLambda.Arn}/invocations"
+        IntegrationResponses: []
+    DependsOn: StateLambdaPermission
+
+  # GET /api/events
+  ApiEventsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      ResourceId: !Ref ApiEventsResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Content-Type: true
+          ResponseModels: {}
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${EventsLambda.Arn}/invocations"
+        IntegrationResponses: []
+    DependsOn: EventsLambdaPermission
+
+  # OPTIONS for CORS on /api/state
+  ApiStateOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      ResourceId: !Ref ApiStateResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+
+  ApiStateOptionsIntegrationResponse:
+    Type: AWS::ApiGateway::IntegrationResponse
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      ResourceId: !Ref ApiStateResource
+      HttpMethod: OPTIONS
+      StatusCode: 200
+      ResponseParameters:
+        method.response.header.Access-Control-Allow-Origin: "'*'"
+        method.response.header.Access-Control-Allow-Headers: "'Content-Type,Accept'"
+        method.response.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+
+  # OPTIONS for CORS on /api/events
+  ApiEventsOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      ResourceId: !Ref ApiEventsResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+
+  ApiEventsOptionsIntegrationResponse:
+    Type: AWS::ApiGateway::IntegrationResponse
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      ResourceId: !Ref ApiEventsResource
+      HttpMethod: OPTIONS
+      StatusCode: 200
+      ResponseParameters:
+        method.response.header.Access-Control-Allow-Origin: "'*'"
+        method.response.header.Access-Control-Allow-Headers: "'Content-Type,Accept'"
+        method.response.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+
+  # Deployment (required for API to be callable)
+  ApiGatewayDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - ApiStateMethod
+      - ApiEventsMethod
+      - ApiStateOptionsMethod
+      - ApiEventsOptionsMethod
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      StageName: !Ref EnvironmentName
+
+Outputs:
+  FrontendBucketName:
+    Description: S3 bucket for frontend assets and game_state/state.json
+    Value: !Ref FrontendBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-FrontendBucket"
+  ApiEndpoint:
+    Description: API Gateway invoke URL (use this in CloudFront origin or frontend API_BASE)
+    Value: !Sub "https://${ApiGatewayRestApi}.execute-api.${AWS::Region}.amazonaws.com/${EnvironmentName}"
+    Export:
+      Name: !Sub "${AWS::StackName}-ApiEndpoint"
+  ApiGatewayId:
+    Description: API Gateway REST API ID
+    Value: !Ref ApiGatewayRestApi
+  StateLambdaArn:
+    Description: State Lambda function ARN
+    Value: !GetAtt StateLambda.Arn
+  EventsLambdaArn:
+    Description: Events Lambda function ARN
+    Value: !GetAtt EventsLambda.Arn
