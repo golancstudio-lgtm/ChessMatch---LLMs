@@ -2,11 +2,13 @@
 LLM Chess Match - Console entry point.
 
 Run a chess game between two LLMs. Prompts for LLM selection, retry config,
-then runs the game and displays the outcome.
+then runs the game and displays the outcome. Optional Stockfish evaluation
+is printed each move (depth from .env).
 """
 
 from __future__ import annotations
 
+import os
 import sys
 
 # Load .env file so API keys work when run from IDE or different shell
@@ -20,6 +22,70 @@ from src.chess_engine import ChessEngine
 from src.game_loop import GameResult, run_game
 from src.llm_adapters import get_available_adapters
 from src.response_parser import format_for_display
+
+
+def _get_stockfish_depth() -> int:
+    """Return Stockfish analysis depth from env; 0 means disabled."""
+    try:
+        s = os.environ.get("STOCKFISH_DEPTH", "").strip()
+        if not s:
+            return 0
+        n = int(s)
+        return max(0, min(n, 50))
+    except ValueError:
+        return 0
+
+
+def _get_stockfish_path() -> str:
+    """Return path to Stockfish binary (env or default 'stockfish')."""
+    return os.environ.get("STOCKFISH_PATH", "").strip() or "stockfish"
+
+
+def _format_score_for_terminal(score) -> str:
+    """Format python-chess PovScore for terminal (White's view)."""
+    if score is None:
+        return "?"
+    white_score = score.white()
+    if white_score.is_mate():
+        m = white_score.mate()
+        if m is not None:
+            if m > 0:
+                return f"Mate in {m} (White)"
+            return f"Mate in {-m} (Black)"
+    cp = white_score.score()
+    if cp is not None:
+        return f"{cp / 100:.2f} (centipawns, + = White)"
+    return "?"
+
+
+def _print_stockfish_eval(fen: str, depth: int, engine_path: str) -> None:
+    """Run Stockfish at given depth on position, print evaluation to terminal."""
+    if depth <= 0:
+        return
+    try:
+        import chess.engine
+    except ImportError:
+        return
+    try:
+        engine = chess.engine.SimpleEngine.popen_uci(engine_path)
+    except (FileNotFoundError, chess.engine.EngineTerminatedError, OSError):
+        print("Stockfish evaluation: (engine not found; set STOCKFISH_PATH or install Stockfish)")
+        return
+    try:
+        board = chess.Board(fen)
+        info = engine.analyse(board, chess.engine.Limit(depth=depth))
+        score = info.get("score")
+        best_move = info.get("pv", [None])[0] if info.get("pv") else None
+        eval_str = _format_score_for_terminal(score)
+        best_san = board.san(best_move) if best_move else "?"
+        print(f"Stockfish (depth {depth}): {eval_str}  |  Best move: {best_san}")
+    except Exception:
+        print("Stockfish evaluation: (error)")
+    finally:
+        try:
+            engine.quit()
+        except Exception:
+            pass
 
 
 def _format_board(fen: str) -> str:
@@ -68,7 +134,7 @@ def _prompt_retries() -> int:
     """Prompt for max retries per illegal move. Returns default if invalid."""
     default = 3
     try:
-        s = input(f"Max retries per illegal move [{default}]: ").strip()
+        s = input(f"Max attempts per move (illegal/parse errors) [{default}]: ").strip()
         if not s:
             return default
         n = int(s)
@@ -178,16 +244,31 @@ def main() -> int:
     max_retries = _prompt_retries()
     time_per_player = _prompt_timer()
 
+    stockfish_depth = _get_stockfish_depth()
+    stockfish_path = _get_stockfish_path()
+    if stockfish_depth:
+        print(f"Stockfish evaluation: depth {stockfish_depth} (from .env)")
+
+    starting_fen = None
+    fen_input = input("Starting FEN (Enter for default): ").strip()
+    if fen_input:
+        try:
+            test = ChessEngine(fen_input)
+            starting_fen = fen_input
+            print("Starting from custom position.")
+        except Exception:
+            print("Invalid FEN; using default starting position.")
+
     print(f"\nStarting game: {white_llm.name} (White) vs {black_llm.name} (Black)")
-    print(f"Max retries per illegal move: {max_retries}")
+    print(f"Max attempts per move: {max_retries}")
     if time_per_player:
         print(f"Time per player: {_format_time(time_per_player)} (0 = loss)")
     else:
         print("Time limit: none")
     print("-" * 50)
 
-    # Track position for board display
-    engine = ChessEngine()
+    # Track position for board display (same FEN as game)
+    engine = ChessEngine(starting_fen) if starting_fen else ChessEngine()
     move_history: list[str] = []
 
     def on_move(
@@ -217,8 +298,10 @@ def main() -> int:
         print(f"{side_name} ({llm_name}): {move}{retry_note}")
         print(_format_board(engine.fen))
 
-        # 2. At the bottom: move history
         print("Move history:", _format_move_history(move_history))
+
+        # Stockfish evaluation (depth from .env)
+        _print_stockfish_eval(engine.fen, stockfish_depth, stockfish_path)
 
     def on_time_update(white_remaining: float, black_remaining: float) -> None:
         print(f"Time remaining: White {_format_time(white_remaining)} | Black {_format_time(black_remaining)}")
@@ -231,6 +314,7 @@ def main() -> int:
             time_per_player_seconds=time_per_player,
             on_move=on_move,
             on_time_update=on_time_update if time_per_player else None,
+            starting_fen=starting_fen,
         )
     except KeyboardInterrupt:
         print("\n\nGame interrupted by user.")

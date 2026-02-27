@@ -1,5 +1,7 @@
 # Environment
 .env
+.chess_match_state.json   # runtime state for frontend API (written by main.py)
+deploy/lambda/game_run/response.json   # CLI lambda invoke output (may contain errors)
 venv/
 .venv/
 __pycache__/
@@ -21,3 +23,6 @@ dist/
 # OS
 .DS_Store
 Thumbs.db
+
+# Native Stockfish binary (too large for GitHub; use WASM in frontend or download separately)
+stockfish-windows-x86-64-avx2/

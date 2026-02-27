@@ -1,0 +1,14 @@
+{
+"fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+"move_history": [],
+"white_name": null,
+"black_name": null,
+"is_game_over": false,
+"winner": null,
+"termination_reason": null,
+"move_log": [],
+"white_remaining_seconds": null,
+"black_remaining_seconds": null,
+"white_timer_started": false,
+"black_timer_started": false
+}

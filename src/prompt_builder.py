@@ -27,10 +27,12 @@ class MoveRequest:
     fen: str
     move_history: list[str]
     side_to_move: str  # "White" or "Black"
+    legal_moves: Optional[list[str]] = None  # All legal moves in PGN; LLM must choose one
     is_retry: bool = False
     error_message: Optional[str] = None
     previous_attempt: Optional[str] = None
     is_parse_error: bool = False  # True if invalid JSON or unparseable move (not illegal move)
+    rejected_moves: Optional[list[str]] = None  # All rejected move strings this turn (do not repeat)
     white_remaining: Optional[float] = None  # Seconds, None = no timer
     black_remaining: Optional[float] = None
 
@@ -39,12 +41,13 @@ class MoveRequest:
 
 SYSTEM_PROMPT_TEMPLATE = """You are playing chess as {side}. Your opponent has just moved (or you are making the first move as White).
 
+Choose openings and moves that fit the position. You may use any opening you think is good—not only the most popular or common ones. Vary your play; do not feel obliged to follow the same opening (e.g. Ruy Lopez) every game.
+
 Rules:
 - Reply with a JSON object containing exactly two fields: "move" and "explanation".
-- "move": exactly ONE move in PGN (Standard Algebraic Notation). Examples: e4, Nf3, O-O, O-O-O, exd5, Nxe5, Qxf7#
+- "move": exactly ONE move. You must choose from the "Legal moves" list given in the position—use one of those strings exactly.
 - "explanation": a brief explanation of why you chose this move.
-- Use standard PGN: K=king, Q=queen, R=rook, B=bishop, N=knight. Pawns have no letter (e4, exd5).
-- Castling: O-O (kingside), O-O-O (queenside).
+- Use standard PGN: K=king, Q=queen, R=rook, B=bishop, N=knight. Pawns have no letter (e4, exd5). Castling: O-O (kingside), O-O-O (queenside).
 
 Example response:
 {{"move": "e4", "explanation": "I control the center and open lines for my pieces."}}
@@ -73,33 +76,53 @@ Consider your remaining time and respond quickly to avoid running out of time.
 
 USER_PROMPT_FIRST_MOVE = """Current position (FEN): {fen}
 {time_section}
-It is White's turn. Make your first move. Reply with JSON: {{"move": "...", "explanation": "..."}}
+{legal_moves_section}It is White's turn. Make your first move. Reply with JSON: {{"move": "...", "explanation": "..."}}
 """
 
 USER_PROMPT_TEMPLATE = """Current position (FEN): {fen}
 {time_section}
 Moves played so far: {move_history}
 
-It is {side}'s turn. Make your move. Reply with JSON: {{"move": "...", "explanation": "..."}}
+{legal_moves_section}It is {side}'s turn. Make your move. Reply with JSON: {{"move": "...", "explanation": "..."}}
 """
 
 USER_PROMPT_RETRY_ILLEGAL = """Current position (FEN): {fen}
 {time_section}
 Moves played so far: {move_history}
 
-It is {side}'s turn. Your previous move "{previous_attempt}" was illegal: {error_message}
+{legal_moves_section}It is {side}'s turn. Your previous move "{previous_attempt}" was illegal: {error_message}
+{rejected_moves_section}
 
-Please try a different legal move. Reply with JSON: {{"move": "...", "explanation": "..."}}
+Please choose a move from the legal moves list above. Reply with JSON: {{"move": "...", "explanation": "..."}}
 """
 
 USER_PROMPT_RETRY_PARSE = """Current position (FEN): {fen}
 {time_section}
 Moves played so far: {move_history}
 
-It is {side}'s turn. Your previous response failed: {error_message}
+{legal_moves_section}It is {side}'s turn. Your previous response failed: {error_message}
+{rejected_moves_section}
 
-Please try again. Reply with JSON: {{"move": "...", "explanation": "..."}}
+Please choose a move from the legal moves list above. Reply with JSON: {{"move": "...", "explanation": "..."}}
 """
+
+
+def _rejected_moves_section(rejected: list[str]) -> str:
+    """Format rejected moves for retry prompt so the LLM does not repeat them."""
+    if not rejected:
+        return ""
+    return "Rejected moves this turn (do not repeat): " + ", ".join(rejected) + "\n\n"
+
+
+def _legal_moves_section(legal_moves: Optional[list[str]]) -> str:
+    """Format legal moves for the prompt; LLM must choose one. Strips + and # so we don't reveal check/checkmate."""
+    if not legal_moves:
+        return ""
+    # Strip trailing + (check) and # (checkmate) so the LLM isn't told which moves are check/checkmate
+    stripped = [m.rstrip("+#") for m in legal_moves]
+    # Deduplicate in case two moves differ only by + vs # (shouldn't happen in SAN, but safe)
+    unique = sorted(dict.fromkeys(stripped))
+    return "Legal moves (you must choose exactly one): " + ", ".join(unique) + "\n\n"
 
 
 def _format_move_history(moves: list[str]) -> str:
@@ -153,6 +176,8 @@ def build_user_prompt(request: MoveRequest) -> str:
     move_history_str = _format_move_history(request.move_history)
     side = request.side_to_move
     time_section = _build_time_section(request)
+    legal_moves_section = _legal_moves_section(request.legal_moves)
+    rejected_section = _rejected_moves_section(request.rejected_moves or [])
 
     if request.is_retry and request.error_message:
         if request.is_parse_error:
@@ -161,21 +186,26 @@ def build_user_prompt(request: MoveRequest) -> str:
                 time_section=time_section,
                 move_history=move_history_str,
                 side=side,
+                legal_moves_section=legal_moves_section,
                 error_message=request.error_message,
+                rejected_moves_section=rejected_section,
             )
         return USER_PROMPT_RETRY_ILLEGAL.format(
             fen=request.fen,
             time_section=time_section,
             move_history=move_history_str,
             side=side,
+            legal_moves_section=legal_moves_section,
             previous_attempt=request.previous_attempt or "",
             error_message=request.error_message,
+            rejected_moves_section=rejected_section,
         )
 
     if not request.move_history:
         return USER_PROMPT_FIRST_MOVE.format(
             fen=request.fen,
             time_section=time_section,
+            legal_moves_section=legal_moves_section,
         )
 
     return USER_PROMPT_TEMPLATE.format(
@@ -183,6 +213,7 @@ def build_user_prompt(request: MoveRequest) -> str:
         time_section=time_section,
         move_history=move_history_str,
         side=side,
+        legal_moves_section=legal_moves_section,
     )
 
 

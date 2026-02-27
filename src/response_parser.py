@@ -38,17 +38,54 @@ _PAWN_PATTERN = re.compile(
 _PGN_PATTERNS = [_CASTLING_PATTERN, _PIECE_PATTERN, _PAWN_PATTERN]
 
 
+# Pattern to find "move": "X" or "move": 'X' in JSON (prefer last occurrence = LLM's final answer)
+_JSON_MOVE_PATTERN = re.compile(
+    r'"move"\s*:\s*"([^"]+)"',
+    re.IGNORECASE,
+)
+
+
 def _extract_json(text: str) -> Optional[dict]:
     """Extract JSON from text, handling markdown code blocks."""
     s = text.strip()
-    # Remove markdown code blocks: ```json ... ``` or ``` ... ```
-    match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", s)
-    if match:
-        s = match.group(1).strip()
+    # Try last code block first (LLMs often put final JSON at the end)
+    code_blocks = list(re.finditer(r"```(?:json)?\s*([\s\S]*?)\s*```", s))
+    if code_blocks:
+        for match in reversed(code_blocks):
+            block = match.group(1).strip()
+            try:
+                data = json.loads(block)
+                if isinstance(data, dict) and "move" in data:
+                    return data
+            except json.JSONDecodeError:
+                continue
+    # Try parsing the whole string
     try:
         return json.loads(s)
     except json.JSONDecodeError:
+        pass
+    # Try to find a JSON object at the end (after last newline or after last })
+    for tail in (s, s[s.rfind("}"):] if "}" in s else ""):
+        if not tail:
+            continue
+        try:
+            data = json.loads(tail)
+            if isinstance(data, dict) and "move" in data:
+                return data
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def _extract_move_from_json_literal(response: str) -> Optional[str]:
+    """Find the last \"move\": \"...\" in the response (LLM's intended move)."""
+    matches = list(_JSON_MOVE_PATTERN.finditer(response))
+    if not matches:
         return None
+    move = matches[-1].group(1).strip()
+    if move.upper().startswith("0-0"):
+        move = move.replace("0", "O")
+    return move if move else None
 
 
 def _extract_move_regex(text: str) -> Optional[str]:
@@ -108,7 +145,11 @@ def parse_llm_response(response: str) -> ParsedResponse:
             error_type="no_move",
         )
 
-    # Fallback: regex (JSON parsing failed)
+    # Fallback: prefer last "move": "X" in text (avoids taking a move from prose)
+    move = _extract_move_from_json_literal(response)
+    if move:
+        return ParsedResponse(move=move, explanation="")
+    # Then try last PGN-like token in text
     move = _extract_move_regex(response)
     if move:
         return ParsedResponse(move=move, explanation="")

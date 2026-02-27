@@ -1,0 +1,7 @@
+{
+  "white_llm_id": "chatgpt",
+  "black_llm_id": "gemini",
+  "max_retries": 3,
+  "time_per_player_seconds": null,
+  "starting_fen": null
+}

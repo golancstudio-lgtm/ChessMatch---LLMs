@@ -1,0 +1,1 @@
+{"statusCode": 500, "body": "{\"error\": \"Game run failed\", \"detail\": \"No module named 'pydantic_core._pydantic_core'\"}"}

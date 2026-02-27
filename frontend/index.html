@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LLM Chess Match</title>
+  <link rel="icon" href="/favicon.ico" type="image/x-icon">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="preconnect" href="https://cdnjs.cloudflare.com">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <div class="header-brand">
+        <img src="/logo.png" alt="LLM Chess Match" class="header-logo">
+        <div class="header-text">
+          <h1 class="logo">LLM Chess Match</h1>
+          <p class="tagline">Watch two LLMs play · Stockfish evaluation after each move</p>
+        </div>
+        <a href="/review" class="btn btn-nav nav-back">Review a game &rarr;</a>
+      </div>
+      <div class="start-game-panel" id="start-game-panel">
+        <h2 class="start-game-title">Start a game</h2>
+        <div class="start-game-row">
+          <label for="white-adapter">White</label>
+          <select id="white-adapter" class="start-game-select"></select>
+          <span class="vs-inline">vs</span>
+          <label for="black-adapter">Black</label>
+          <select id="black-adapter" class="start-game-select"></select>
+        </div>
+        <div class="start-game-row start-game-options">
+          <label for="time-per-player">Time per player (s)
+            <span class="help-badge" data-tooltip="Leave 0 for no time limit per player.">?</span>
+          </label>
+          <input type="number" id="time-per-player" class="start-game-input" min="0" step="1" value="0">
+          <label for="max-retries">Max retries per move
+            <span class="help-badge" data-tooltip="Leave 0 for unlimited retries; invalid moves never cause a forfeit.">?</span>
+          </label>
+          <input type="number" id="max-retries" class="start-game-input" min="0" max="20" value="0">
+        </div>
+        <div class="start-game-row">
+          <label for="starting-fen">Starting FEN (optional)</label>
+          <input type="text" id="starting-fen" class="start-game-input start-game-fen" placeholder="Leave empty for default position" title="Custom position in FEN format">
+        </div>
+        <div class="start-game-row">
+          <button type="button" class="btn btn-primary" id="btn-start-game">Start game</button>
+          <span class="start-game-message" id="start-game-message"></span>
+        </div>
+      </div>
+      <div class="match-header" id="match-header"></div>
+    </header>
+
+    <main class="main">
+      <div class="top-row">
+        <section class="panel chat-panel chat-left">
+          <h2>Chat (LLM exchange)</h2>
+          <div id="chat-log" class="chat-log"></div>
+        </section>
+
+        <section class="board-section">
+          <div class="board-wrap">
+            <div class="eval-bar" id="eval-bar" title="Evaluation">
+              <div class="eval-bar-fill" id="eval-bar-fill"></div>
+              <div class="eval-bar-score" id="eval-bar-score"></div>
+            </div>
+            <div class="board-ranks" id="board-ranks" aria-hidden="true"></div>
+            <div class="board-and-files">
+              <div id="board" class="chess-board" aria-label="Chess board"></div>
+              <div class="board-files" id="board-files" aria-hidden="true"></div>
+            </div>
+          </div>
+          <div class="board-status" id="board-status"></div>
+        </section>
+
+        <div class="right-col">
+          <section class="panel game-eval-panel">
+            <div class="game-eval-section game-eval-eval">
+              <h2 class="game-eval-heading">Evaluation</h2>
+              <div id="eval-output" class="eval-output"></div>
+              <div id="eval-detail" class="eval-detail" aria-live="polite"></div>
+            </div>
+            <div class="game-eval-divider"></div>
+            <div class="game-eval-section game-eval-game">
+              <h2 class="game-eval-heading">Game</h2>
+              <div class="status" id="game-status"></div>
+              <div class="move-history-wrap">
+                <div id="move-history" class="move-history"></div>
+              </div>
+              <button type="button" class="btn btn-export" id="btn-export">Export game</button>
+            </div>
+          </section>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+  <script src="/static/config.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: "ChessMatch LLM - S3, API Gateway REST, Lambdas for /api/state and /api/events"
+Description: "ChessMatch LLM - S3 static website + API Gateway REST + Lambdas (no CloudFront)"
 
 Parameters:
   ProjectName:
@@ -16,25 +16,29 @@ Conditions:
   IsProd: !Equals [ !Ref EnvironmentName, prod ]
 
 Resources:
-  # --- S3 Bucket (frontend + optional game state file) ---
+  # --- S3 Bucket (frontend + game state); static website hosting, no CloudFront ---
   FrontendBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub "${ProjectName}-${EnvironmentName}-frontend-${AWS::AccountId}"
+      BucketName: !Sub "${ProjectName}-${EnvironmentName}-nocf-frontend-${AWS::AccountId}"
+      # Allow bucket policy to grant public read for website hosting
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
-        BlockPublicPolicy: true
+        BlockPublicPolicy: false
         IgnorePublicAcls: true
-        RestrictPublicBuckets: true
+        RestrictPublicBuckets: false
       CorsConfiguration:
         CorsRules:
           - AllowedHeaders: ["*"]
             AllowedMethods: [GET, HEAD]
             AllowedOrigins: ["*"]
             MaxAge: 3600
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
     DeletionPolicy: Retain
 
-  # Bucket policy: allow CloudFront (OAC) to read objects (added after CloudFront distribution)
+  # Public read for static website (no CloudFront in front)
   FrontendBucketPolicy:
     Type: AWS::S3::BucketPolicy
     Properties:
@@ -42,130 +46,17 @@ Resources:
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
-          - Sid: AllowCloudFrontOAC
+          - Sid: PublicReadGetObject
             Effect: Allow
-            Principal:
-              Service: cloudfront.amazonaws.com
+            Principal: "*"
             Action: s3:GetObject
             Resource: !Sub "${FrontendBucket.Arn}/*"
-            Condition:
-              StringEquals:
-                "AWS:SourceArn": !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}"
-    DependsOn: CloudFrontDistribution
-
-  # State file object key: game_state/state.json (upload .chess_match_state.json here for Lambda to read)
-
-  # --- CloudFront Function: rewrite /review to /review.html (S3 has review.html, no "review" key) ---
-  ReviewRewriteFunction:
-    Type: AWS::CloudFront::Function
-    Properties:
-      Name: !Sub "${ProjectName}-${EnvironmentName}-review-rewrite"
-      AutoPublish: true
-      FunctionConfig:
-        Comment: Rewrite /review to /review.html for S3 origin
-        Runtime: cloudfront-js-2.0
-      FunctionCode: |
-        function handler(event) {
-          var request = event.request;
-          var uri = request.uri || '';
-          if (uri === '/review' || uri === '/review/') {
-            request.uri = '/review.html';
-          }
-          return request;
-        }
-
-  # --- CloudFront (OAC + distribution for frontend) ---
-  CloudFrontOAC:
-    Type: AWS::CloudFront::OriginAccessControl
-    Properties:
-      OriginAccessControlConfig:
-        Name: !Sub "${ProjectName}-${EnvironmentName}-oac"
-        Description: OAC for ChessMatch frontend S3 bucket
-        OriginAccessControlOriginType: s3
-        SigningBehavior: always
-        SigningProtocol: sigv4
-
-  CloudFrontDistribution:
-    Type: AWS::CloudFront::Distribution
-    Properties:
-      DistributionConfig:
-        Enabled: true
-        Comment: !Sub "ChessMatch LLM frontend - ${EnvironmentName}"
-        DefaultRootObject: index.html
-        PriceClass: PriceClass_100
-        Origins:
-          - Id: S3Frontend
-            DomainName: !Sub "${FrontendBucket}.s3.${AWS::Region}.amazonaws.com"
-            OriginAccessControlId: !GetAtt CloudFrontOAC.Id
-            S3OriginConfig:
-              OriginAccessIdentity: ""
-          - Id: ApiGateway
-            DomainName: !Sub "${ApiGatewayRestApi}.execute-api.${AWS::Region}.amazonaws.com"
-            OriginPath: !Sub "/${EnvironmentName}"
-            CustomOriginConfig:
-              HTTPSPort: 443
-              OriginProtocolPolicy: https-only
-        DefaultCacheBehavior:
-          TargetOriginId: S3Frontend
-          ViewerProtocolPolicy: redirect-to-https
-          FunctionAssociations:
-            - EventType: viewer-request
-              FunctionARN: !GetAtt ReviewRewriteFunction.FunctionMetadata.FunctionARN
-          AllowedMethods:
-            - GET
-            - HEAD
-            - OPTIONS
-          CachedMethods:
-            - GET
-            - HEAD
-          Compress: true
-          DefaultTTL: 86400
-          MinTTL: 0
-          MaxTTL: 31536000
-          ForwardedValues:
-            QueryString: false
-            Cookies:
-              Forward: none
-        CacheBehaviors:
-          - PathPattern: /api/*
-            TargetOriginId: ApiGateway
-            ViewerProtocolPolicy: redirect-to-https
-            AllowedMethods:
-              - GET
-              - HEAD
-              - OPTIONS
-              - PUT
-              - PATCH
-              - POST
-              - DELETE
-            CachedMethods:
-              - GET
-              - HEAD
-            Compress: true
-            DefaultTTL: 0
-            MinTTL: 0
-            MaxTTL: 0
-            ForwardedValues:
-              QueryString: true
-              Headers:
-                - Accept
-              Cookies:
-                Forward: none
-        CustomErrorResponses:
-          - ErrorCode: 403
-            ResponseCode: 200
-            ResponsePagePath: /index.html
-            ErrorCachingMinTTL: 0
-          - ErrorCode: 404
-            ResponseCode: 200
-            ResponsePagePath: /index.html
-            ErrorCachingMinTTL: 0
 
   # --- IAM role for Lambdas ---
   LambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${ProjectName}-${EnvironmentName}-lambda-role"
+      RoleName: !Sub "${ProjectName}-${EnvironmentName}-nocf-lambda-role"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -194,12 +85,40 @@ Resources:
               - s3:GetObject
               - s3:PutObject
             Resource: !Sub "${FrontendBucket.Arn}/*"
+          - Effect: Allow
+            Action: lambda:InvokeFunction
+            Resource: !GetAtt GameRunLambda.Arn
+          - Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+            Resource: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:llm-api-secrets*"
+
+  # --- Lambda: GET /api/state ---
+  StateLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${EnvironmentName}-nocf-api-state"
+      Runtime: python3.12
+      Handler: handler.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 10
+      MemorySize: 128
+      Environment:
+        Variables:
+          STATE_BUCKET: !Ref FrontendBucket
+          STATE_KEY: "game_state/state.json"
+      Code:
+        ZipFile: |
+          def handler(event, context):
+              return {"statusCode": 200, "body": "{}"}
+    Metadata:
+      BuildPath: lambda/api_state
 
   # --- Lambda: GET /api/tick (timer-only endpoint) ---
   TickLambda:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: !Sub "${ProjectName}-${EnvironmentName}-api-tick"
+      FunctionName: !Sub "${ProjectName}-${EnvironmentName}-nocf-api-tick"
       Runtime: python3.12
       Handler: handler.handler
       Role: !GetAtt LambdaExecutionRole.Arn
@@ -224,28 +143,6 @@ Resources:
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGatewayRestApi}/*"
 
-  # --- Lambda: GET /api/state ---
-  StateLambda:
-    Type: AWS::Lambda::Function
-    Properties:
-      FunctionName: !Sub "${ProjectName}-${EnvironmentName}-api-state"
-      Runtime: python3.12
-      Handler: handler.handler
-      Role: !GetAtt LambdaExecutionRole.Arn
-      Timeout: 10
-      MemorySize: 128
-      Environment:
-        Variables:
-          STATE_BUCKET: !Ref FrontendBucket
-          STATE_KEY: "game_state/state.json"
-      Code:
-        ZipFile: |
-          # Placeholder - deployment script uploads real code
-          def handler(event, context):
-              return {"statusCode": 200, "body": "{}"}
-    Metadata:
-      BuildPath: lambda/api_state
-
   StateLambdaPermission:
     Type: AWS::Lambda::Permission
     Properties:
@@ -258,7 +155,7 @@ Resources:
   EventsLambda:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: !Sub "${ProjectName}-${EnvironmentName}-api-events"
+      FunctionName: !Sub "${ProjectName}-${EnvironmentName}-nocf-api-events"
       Runtime: python3.12
       Handler: handler.handler
       Role: !GetAtt LambdaExecutionRole.Arn
@@ -266,7 +163,6 @@ Resources:
       MemorySize: 128
       Code:
         ZipFile: |
-          # Placeholder - deployment script uploads real code
           def handler(event, context):
               return {"statusCode": 200, "body": "event: state_updated\\ndata: {}\\n\\n"}
     Metadata:
@@ -284,7 +180,7 @@ Resources:
   ResetLambda:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: !Sub "${ProjectName}-${EnvironmentName}-api-reset"
+      FunctionName: !Sub "${ProjectName}-${EnvironmentName}-nocf-api-reset"
       Runtime: python3.12
       Handler: handler.handler
       Role: !GetAtt LambdaExecutionRole.Arn
@@ -296,7 +192,6 @@ Resources:
           STATE_KEY: "game_state/state.json"
       Code:
         ZipFile: |
-          # Placeholder - deployment script uploads real code
           def handler(event, context):
               return {"statusCode": 200, "body": "{}"}
     Metadata:
@@ -314,7 +209,7 @@ Resources:
   AdaptersLambda:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: !Sub "${ProjectName}-${EnvironmentName}-api-adapters"
+      FunctionName: !Sub "${ProjectName}-${EnvironmentName}-nocf-api-adapters"
       Runtime: python3.12
       Handler: handler.handler
       Role: !GetAtt LambdaExecutionRole.Arn
@@ -322,8 +217,10 @@ Resources:
       MemorySize: 128
       Code:
         ZipFile: |
+          import json
+          ADAPTERS = [{"id":"chatgpt","name":"ChatGPT 5.2"},{"id":"gemini","name":"Gemini"},{"id":"claude","name":"Claude"},{"id":"mistral","name":"Mistral"},{"id":"cohere","name":"Cohere"},{"id":"llama_groq","name":"Llama (Groq)"}, {"id":"grok","name":"Grok"}]
           def handler(event, context):
-              return {"statusCode": 200, "body": "[]"}
+              return {"statusCode":200,"headers":{"Content-Type":"application/json","Access-Control-Allow-Origin":"*","Cache-Control":"no-cache"},"body":json.dumps(ADAPTERS)}
     Metadata:
       BuildPath: lambda/api_adapters
 
@@ -335,11 +232,11 @@ Resources:
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGatewayRestApi}/*"
 
-  # --- Lambda: game_run (invoked async by GameStartLambda) ---
+  # --- Lambda: runs the full game loop (invoked async by GameStartLambda); code deployed by script ---
   GameRunLambda:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: !Sub "${ProjectName}-${EnvironmentName}-game-run"
+      FunctionName: !Sub "${ProjectName}-${EnvironmentName}-nocf-game-run"
       Runtime: python3.12
       Handler: handler.handler
       Role: !GetAtt LambdaExecutionRole.Arn
@@ -356,12 +253,12 @@ Resources:
     Metadata:
       BuildPath: lambda/game_run
 
-  # --- Lambda: POST /api/game/start ---
+  # --- Lambda: POST /api/game/start (writes initial state to S3, invokes GameRunLambda) ---
   GameStartLambda:
     Type: AWS::Lambda::Function
     DependsOn: GameRunLambda
     Properties:
-      FunctionName: !Sub "${ProjectName}-${EnvironmentName}-api-game-start"
+      FunctionName: !Sub "${ProjectName}-${EnvironmentName}-nocf-api-game-start"
       Runtime: python3.12
       Handler: handler.handler
       Role: !GetAtt LambdaExecutionRole.Arn
@@ -374,8 +271,9 @@ Resources:
           GAME_RUN_LAMBDA_NAME: !Ref GameRunLambda
       Code:
         ZipFile: |
+          import json
           def handler(event, context):
-              return {"statusCode": 202, "body": "{}"}
+              return {"statusCode":202,"headers":{"Content-Type":"application/json","Access-Control-Allow-Origin":"*"},"body":json.dumps({"message":"Game started"})}
     Metadata:
       BuildPath: lambda/api_game_start
 
@@ -387,28 +285,11 @@ Resources:
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGatewayRestApi}/*"
 
-  # Extra policy for game_run invoke + Secrets Manager (after GameRunLambda exists for existence check)
-  LambdaGameRunPolicy:
-    Type: AWS::IAM::Policy
-    DependsOn: GameRunLambda
-    Properties:
-      PolicyName: !Sub "${ProjectName}-${EnvironmentName}-lambda-gamerun-policy"
-      Roles: [ !Ref LambdaExecutionRole ]
-      PolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Action: lambda:InvokeFunction
-            Resource: !GetAtt GameRunLambda.Arn
-          - Effect: Allow
-            Action: secretsmanager:GetSecretValue
-            Resource: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:llm-api-secrets*"
-
   # --- API Gateway REST API ---
   ApiGatewayRestApi:
     Type: AWS::ApiGateway::RestApi
     Properties:
-      Name: !Sub "${ProjectName}-${EnvironmentName}-api"
+      Name: !Sub "${ProjectName}-${EnvironmentName}-nocf-api"
       Description: ChessMatch LLM REST API
       EndpointConfiguration:
         Types:
@@ -470,99 +351,6 @@ Resources:
       PathPart: start
       RestApiId: !Ref ApiGatewayRestApi
 
-  # GET /api/adapters
-  ApiAdaptersMethod:
-    Type: AWS::ApiGateway::Method
-    Properties:
-      RestApiId: !Ref ApiGatewayRestApi
-      ResourceId: !Ref ApiAdaptersResource
-      HttpMethod: GET
-      AuthorizationType: NONE
-      MethodResponses:
-        - StatusCode: 200
-          ResponseParameters:
-            method.response.header.Access-Control-Allow-Origin: true
-          ResponseModels:
-            application/json: Empty
-      Integration:
-        Type: AWS_PROXY
-        IntegrationHttpMethod: POST
-        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AdaptersLambda.Arn}/invocations"
-        IntegrationResponses: []
-    DependsOn: AdaptersLambdaPermission
-
-  ApiAdaptersOptionsMethod:
-    Type: AWS::ApiGateway::Method
-    Properties:
-      RestApiId: !Ref ApiGatewayRestApi
-      ResourceId: !Ref ApiAdaptersResource
-      HttpMethod: OPTIONS
-      AuthorizationType: NONE
-      Integration:
-        Type: MOCK
-        RequestTemplates:
-          application/json: '{"statusCode": 200}'
-        IntegrationResponses:
-          - StatusCode: 200
-            ResponseParameters:
-              method.response.header.Access-Control-Allow-Origin: "'*'"
-              method.response.header.Access-Control-Allow-Headers: "'Content-Type,Accept'"
-              method.response.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
-      MethodResponses:
-        - StatusCode: 200
-          ResponseParameters:
-            method.response.header.Access-Control-Allow-Origin: true
-            method.response.header.Access-Control-Allow-Headers: true
-            method.response.header.Access-Control-Allow-Methods: true
-
-  # POST /api/game/start
-  ApiGameStartMethod:
-    Type: AWS::ApiGateway::Method
-    Properties:
-      RestApiId: !Ref ApiGatewayRestApi
-      ResourceId: !Ref ApiGameStartResource
-      HttpMethod: POST
-      AuthorizationType: NONE
-      MethodResponses:
-        - StatusCode: 202
-          ResponseParameters:
-            method.response.header.Access-Control-Allow-Origin: true
-          ResponseModels:
-            application/json: Empty
-        - StatusCode: 400
-        - StatusCode: 500
-        - StatusCode: 503
-      Integration:
-        Type: AWS_PROXY
-        IntegrationHttpMethod: POST
-        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GameStartLambda.Arn}/invocations"
-        IntegrationResponses: []
-    DependsOn: GameStartLambdaPermission
-
-  ApiGameStartOptionsMethod:
-    Type: AWS::ApiGateway::Method
-    Properties:
-      RestApiId: !Ref ApiGatewayRestApi
-      ResourceId: !Ref ApiGameStartResource
-      HttpMethod: OPTIONS
-      AuthorizationType: NONE
-      Integration:
-        Type: MOCK
-        RequestTemplates:
-          application/json: '{"statusCode": 200}'
-        IntegrationResponses:
-          - StatusCode: 200
-            ResponseParameters:
-              method.response.header.Access-Control-Allow-Origin: "'*'"
-              method.response.header.Access-Control-Allow-Headers: "'Content-Type,Accept'"
-              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
-      MethodResponses:
-        - StatusCode: 200
-          ResponseParameters:
-            method.response.header.Access-Control-Allow-Origin: true
-            method.response.header.Access-Control-Allow-Headers: true
-            method.response.header.Access-Control-Allow-Methods: true
-
   # GET /api/state
   ApiStateMethod:
     Type: AWS::ApiGateway::Method
@@ -613,6 +401,53 @@ Resources:
         IntegrationResponses: []
     DependsOn: TickLambdaPermission
 
+  # GET /api/adapters
+  ApiAdaptersMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      ResourceId: !Ref ApiAdaptersResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+          ResponseModels:
+            application/json: Empty
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AdaptersLambda.Arn}/invocations"
+        IntegrationResponses: []
+    DependsOn:
+      - AdaptersLambda
+      - AdaptersLambdaPermission
+
+  ApiAdaptersOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      ResourceId: !Ref ApiAdaptersResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,Accept'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+
   # GET /api/events
   ApiEventsMethod:
     Type: AWS::ApiGateway::Method
@@ -636,6 +471,62 @@ Resources:
         Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${EventsLambda.Arn}/invocations"
         IntegrationResponses: []
     DependsOn: EventsLambdaPermission
+
+  # POST /api/game/start (writes state to S3, invokes game_run; returns 202)
+  ApiGameStartMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      ResourceId: !Ref ApiGameStartResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      MethodResponses:
+        - StatusCode: 202
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+          ResponseModels:
+            application/json: Empty
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 503
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GameStartLambda.Arn}/invocations"
+        IntegrationResponses: []
+    DependsOn:
+      - GameStartLambda
+      - GameStartLambdaPermission
+
+  ApiGameStartOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+      ResourceId: !Ref ApiGameStartResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,Accept'"
+              method.response.header.Access-Control-Allow-Methods: "'POST,OPTIONS'"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
 
   # POST /api/game/reset
   ApiGameResetMethod:
@@ -758,7 +649,6 @@ Resources:
             method.response.header.Access-Control-Allow-Headers: true
             method.response.header.Access-Control-Allow-Methods: true
 
-  # Deployment (required for API to be callable)
   ApiGatewayDeployment:
     Type: AWS::ApiGateway::Deployment
     DependsOn:
@@ -777,6 +667,8 @@ Resources:
     Properties:
       RestApiId: !Ref ApiGatewayRestApi
       StageName: !Ref EnvironmentName
+      # Force new deployment when any method changes (avoids 403 MissingAuthenticationToken for new routes)
+      Description: !Sub "Deploy ${ApiAdaptersMethod}-${ApiStateMethod}-${ApiEventsMethod}-${ApiGameResetMethod}-${ApiGameStartMethod}"
 
 Outputs:
   FrontendBucketName:
@@ -784,8 +676,13 @@ Outputs:
     Value: !Ref FrontendBucket
     Export:
       Name: !Sub "${AWS::StackName}-FrontendBucket"
+  FrontendWebsiteURL:
+    Description: S3 static website URL (HTTP only; use for frontend). Review page is /review.html
+    Value: !GetAtt FrontendBucket.WebsiteURL
+    Export:
+      Name: !Sub "${AWS::StackName}-FrontendWebsiteURL"
   ApiEndpoint:
-    Description: API Gateway invoke URL (use this in CloudFront origin or frontend API_BASE)
+    Description: API Gateway invoke URL (set as API_BASE in frontend when frontend is on S3 website)
     Value: !Sub "https://${ApiGatewayRestApi}.execute-api.${AWS::Region}.amazonaws.com/${EnvironmentName}"
     Export:
       Name: !Sub "${AWS::StackName}-ApiEndpoint"
@@ -798,12 +695,6 @@ Outputs:
   EventsLambdaArn:
     Description: Events Lambda function ARN
     Value: !GetAtt EventsLambda.Arn
-  CloudFrontDistributionId:
-    Description: CloudFront distribution ID (frontend)
-    Value: !Ref CloudFrontDistribution
-  CloudFrontDomainName:
-    Description: CloudFront domain (use with https:// for frontend URL)
-    Value: !GetAtt CloudFrontDistribution.DomainName
-  CloudFrontURL:
-    Description: Frontend URL via CloudFront
-    Value: !Sub "https://${CloudFrontDistribution.DomainName}"
+  ResetLambdaArn:
+    Description: Reset Lambda function ARN
+    Value: !GetAtt ResetLambda.Arn

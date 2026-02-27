@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Review game – LLM Chess Match</title>
+  <link rel="icon" href="/favicon.ico" type="image/x-icon">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="app">
+    <header class="header">
+      <div class="header-brand">
+        <img src="/logo.png" alt="LLM Chess Match" class="header-logo">
+        <div class="header-text">
+          <h1 class="logo">Review game</h1>
+          <p class="tagline">Upload a game (PGN + chat) and step through moves</p>
+        </div>
+        <a href="/" class="btn btn-nav nav-back">&larr; Back to live match</a>
+      </div>
+      <div id="review-upload" class="review-upload">
+        <div class="upload-row">
+          <label class="upload-label">PGN file</label>
+          <input type="file" id="file-pgn" accept=".pgn" class="file-input">
+        </div>
+        <div class="upload-row">
+          <label class="upload-label">Chat log (.txt)</label>
+          <input type="file" id="file-txt" accept=".txt" class="file-input">
+        </div>
+        <button type="button" class="btn btn-primary" id="btn-load-review">Load and review</button>
+        <p id="review-upload-error" class="review-error"></p>
+      </div>
+      <div id="review-header" class="match-header" style="display: none;"></div>
+    </header>
+
+    <main class="main review-main" id="review-main" style="display: none; flex: 1; min-height: 0;">
+      <div class="top-row">
+        <section class="panel chat-panel chat-left">
+          <h2>LLM comments</h2>
+          <div id="review-chat" class="chat-log review-chat-all"></div>
+        </section>
+
+        <section class="board-section">
+          <div class="board-wrap">
+            <div class="board-ranks" id="review-board-ranks" aria-hidden="true"></div>
+            <div class="board-and-files">
+              <div id="review-board" class="chess-board" aria-label="Chess board"></div>
+              <div class="board-files" id="review-board-files" aria-hidden="true"></div>
+            </div>
+          </div>
+          <div class="board-status" id="review-board-status"></div>
+          <div class="review-nav">
+            <span class="review-nav-buttons">
+              <button type="button" class="btn btn-secondary" id="btn-prev" title="Previous move (←)">← Previous</button>
+              <button type="button" class="btn btn-secondary" id="btn-next" title="Next move (→)">Next →</button>
+            </span>
+            <span id="review-move-indicator" class="review-move-indicator">Move 0 / 0</span>
+          </div>
+        </section>
+
+        <div class="right-col">
+          <section class="panel game-eval-panel">
+            <div class="game-eval-section game-eval-game">
+              <h2 class="game-eval-heading">Game</h2>
+              <div class="status" id="review-status"></div>
+              <div class="move-history-wrap">
+                <div id="review-move-history" class="move-history"></div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+  <script src="/static/review.js"></script>
+</body>
+</html>

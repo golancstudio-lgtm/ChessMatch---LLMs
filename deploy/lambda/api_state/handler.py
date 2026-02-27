@@ -1,6 +1,7 @@
 """
 Lambda handler for GET /api/state.
-Reads game state from S3 (game_state/state.json) and returns JSON for the frontend.
+Reads game state from S3 and returns JSON for the frontend.
+Timer values are NOT included; use GET /api/tick for whiteRemainingSeconds/blackRemainingSeconds.
 Environment: STATE_BUCKET, STATE_KEY (default game_state/state.json).
 """
 from __future__ import annotations
@@ -14,11 +15,20 @@ import boto3
 DEFAULT_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 
 
-def _get_state_from_s3() -> dict[str, Any] | None:
+def _get_state_key(event: dict) -> str:
+    """State key from query game_id or default."""
+    params = event.get("queryStringParameters") or {}
+    game_id = (params.get("game_id") or "").strip()
+    if game_id:
+        return f"game_state/{game_id}.json"
+    return os.environ.get("STATE_KEY", "game_state/state.json").strip() or "game_state/state.json"
+
+
+def _get_state_from_s3(event: dict) -> dict[str, Any] | None:
     bucket = os.environ.get("STATE_BUCKET", "").strip()
-    key = os.environ.get("STATE_KEY", "game_state/state.json").strip()
     if not bucket:
         return None
+    key = _get_state_key(event)
     try:
         s3 = boto3.client("s3")
         obj = s3.get_object(Bucket=bucket, Key=key)
@@ -57,12 +67,8 @@ def _build_response(state: dict[str, Any]) -> dict:
 
 
 def handler(event: dict, context: object) -> dict:
-    state_data = _get_state_from_s3()
-    if state_data is None:
-        body = _build_response({})
-    else:
-        body = _build_response(state_data)
-
+    state_data = _get_state_from_s3(event) or {}
+    body = _build_response(state_data)
     return {
         "statusCode": 200,
         "headers": {
